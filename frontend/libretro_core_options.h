@@ -377,7 +377,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
          { "fixed_interval", "Fixed Interval" },
          { NULL, NULL },
       },
-      "disabled"
+      "auto"
    },
    {
       "pcsx_rearmed_frameskip_threshold",
@@ -828,7 +828,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
          { "enabled",  NULL },
          { NULL, NULL},
       },
-      "enabled",
+      "disabled",
    },
    {
       "pcsx_rearmed_gpu_unai_skipline",
@@ -842,7 +842,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
          { "enabled",  NULL },
          { NULL, NULL},
       },
-      "disabled",
+      "enabled",
    },
    {
       "pcsx_rearmed_gpu_unai_lighting",
@@ -870,7 +870,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
          { "enabled",  NULL },
          { NULL, NULL},
       },
-      "disabled",
+      "enabled",
    },
 #endif /* GPU_UNAI */
    {

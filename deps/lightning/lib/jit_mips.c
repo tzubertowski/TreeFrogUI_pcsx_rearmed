@@ -2148,6 +2148,15 @@ _emit_code(jit_state_t *_jit)
 #endif
 		    _jitc->patches.offset = undo.patch_offset;
 		    patch_alist(1);
+		    /* SF3000 fix: discard any instruction left in the MIPS 1-deep
+		     * delay-slot pending buffer before restarting the function.
+		     * The restart resets pc to the function start and re-emits the
+		     * prologue, whose first instr() would otherwise flush this stale
+		     * pending instruction at offset 0 — duplicating the last body
+		     * instruction at the function ENTRY (before the prologue) and
+		     * making blocks that jump to the entry execute it with garbage
+		     * registers (observed: lightrec c_wrapper SIGSEGV @0x268). */
+		    _jitc->inst.pend = 0;
 		    goto restart_function;
 		}
 		/* remember label is defined */
@@ -2411,7 +2420,11 @@ jit_flush(void *fptr, void *tptr)
     s = sysconf(_SC_PAGE_SIZE);
     f = (jit_word_t)fptr & -s;
     t = (((jit_word_t)tptr) + s - 1) & -s;
-    _flush_cache((void *)f, t - f, ICACHE);
+    /* SF3000: glibc _flush_cache(ICACHE) does not flush the I-cache here
+     * (JIT code runs against stale icache -> SIGSEGV on first block).
+     * __builtin___clear_cache emits the cacheflush syscall that works on this
+     * kernel (verified by mmap_exec_test). */
+    __builtin___clear_cache((char *)f, (char *)t);
 #endif
 }
 

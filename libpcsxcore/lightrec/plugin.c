@@ -506,11 +506,6 @@ static int lightrec_plugin_init(void)
 			lightrec_map, ARRAY_SIZE(lightrec_map),
 			&lightrec_ops);
 
-	// fprintf(stderr, "M=0x%lx, P=0x%lx, R=0x%lx, H=0x%lx\n",
-	// 		(uintptr_t) psxRegs.ptrs.psxM,
-	// 		(uintptr_t) psxRegs.ptrs.psxP,
-	// 		(uintptr_t) psxRegs.ptrs.psxR,
-	// 		(uintptr_t) psxRegs.ptrs.psxH);
 
 #ifndef _WIN32
 	signal(SIGPIPE, exit);

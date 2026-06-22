@@ -35,9 +35,13 @@
 #endif
 
 static const uintptr_t supported_io_bases[] = {
+	/* Try 0x40000000 first on SF3000: process lives at 0x400000-0x700000,
+	 * leaving 0x40000000-0x407fffff completely free for 4 mirrors + code buf.
+	 * offset_ram=0x40000000 → the sub-par dispatcher path applies it correctly
+	 * (LUI+ADDU addresses are distinguishably high, away from host pointers). */
+	0x40000000,
 	0x0,
 	0x10000000,
-	0x40000000,
 	0x80000000,
 };
 
@@ -50,16 +54,11 @@ static void * mmap_huge(void *addr, size_t length, int prot, int flags,
 		map = mmap(addr, length, prot,
 			   flags | MAP_HUGETLB | (21 << MAP_HUGE_SHIFT),
 			   fd, offset);
-		if (map != MAP_FAILED)
-			printf("Hugetlb mmap to address 0x%" PRIxPTR " succeeded\n",
-			       (uintptr_t) addr);
 	}
 
 	if (map == MAP_FAILED) {
 		map = mmap(addr, length, prot, flags, fd, offset);
 		if (map != MAP_FAILED) {
-			printf("Regular mmap to address 0x%" PRIxPTR " succeeded\n",
-			       (uintptr_t) addr);
 #ifdef MADV_HUGEPAGE
 			madvise(map, length, MADV_HUGEPAGE);
 #endif
@@ -82,6 +81,15 @@ static int lightrec_mmap_ram(bool hugetlb)
         memfd = syscall(SYS_memfd_create, "/lightrec_memfd",
 			flags);
 	if (memfd < 0) {
+		/* Old kernels (e.g. SF3000, 2.6.32) lack memfd_create (ENOSYS).
+		 * Fall back to a tmpfs-backed file: mkstemp + unlink keeps a
+		 * shared, ftruncatable fd we can map at all 4 mirror addresses. */
+		char tmpl[] = "/tmp/lightrec_memfd_XXXXXX";
+		memfd = mkstemp(tmpl);
+		if (memfd >= 0)
+			unlink(tmpl);
+	}
+	if (memfd < 0) {
 		SysMessage("Failed to create memfd: %d", errno);
 		err = -errno;
 		return err;
@@ -97,13 +105,29 @@ static int lightrec_mmap_ram(bool hugetlb)
 	for (i = 0; i < ARRAY_SIZE(supported_io_bases); i++) {
 		base = supported_io_bases[i];
 
+		/* Skip base 0: even with mincore guard, partial MAP_FIXED at 0x0
+		 * destabilises the process (munmap of 0x0-0x3fffff races with the
+		 * runtime).  We fix the offset codegen bug for base 0x10000000 instead.
+		 * Identity map (offset_ram=0) is the ideal but can't be established
+		 * safely here. */
+		if (base == 0)
+			continue;
+
 		for (j = 0; j < 4; j++) {
 			void *base_ptr = (void *)(base + j * 0x200000);
+			/* Old kernels lack MAP_FIXED_NOREPLACE; plain MAP_FIXED is
+			 * destructive (silently unmaps whatever is there).  Emulate
+			 * NOREPLACE: only MAP_FIXED if mincore says the range is fully
+			 * unmapped (mincore -> -1/ENOMEM).  Otherwise treat as occupied. */
+			unsigned char vec[0x200000 / 4096];
+			if (mincore(base_ptr, 0x200000, vec) == 0 || errno != ENOMEM) {
+				/* range (partly) mapped -> can't use, abandon this base */
+				break;
+			}
 			map = mmap_huge(base_ptr, 0x200000, PROT_READ | PROT_WRITE,
-					MAP_SHARED | MAP_FIXED_NOREPLACE, memfd, 0);
+					MAP_SHARED | MAP_FIXED, memfd, 0);
 			if (map == MAP_FAILED)
 				break;
-			// some systems ignore MAP_FIXED_NOREPLACE
 			if (map != base_ptr) {
 				munmap(map, 0x200000);
 				break;
@@ -155,7 +179,7 @@ int lightrec_init_mmap(void)
 	target = base + 0x1f000000;
 	map = mmap(target, 0x10000,
 		   PROT_READ | PROT_WRITE,
-		   MAP_PRIVATE | /*MAP_FIXED_NOREPLACE |*/ MAP_ANONYMOUS, -1, 0);
+		   MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0);
 	if (map == MAP_FAILED) {
 		SysMessage("Unable to mmap parallel port: %d", errno);
 		err = -EINVAL;
@@ -169,7 +193,7 @@ int lightrec_init_mmap(void)
 	target = base + 0x1fc00000;
 	map = mmap_huge(target, 0x200000,
 			PROT_READ | PROT_WRITE,
-			MAP_PRIVATE | /*MAP_FIXED_NOREPLACE |*/ MAP_ANONYMOUS, -1, 0);
+			MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0);
 	if (map == MAP_FAILED) {
 		SysMessage("Unable to mmap BIOS: %d", errno);
 		err = -EINVAL;
@@ -183,7 +207,7 @@ int lightrec_init_mmap(void)
 	target = base + 0x1f800000;
 	map = mmap(target, 0x10000,
 		   PROT_READ | PROT_WRITE,
-		   MAP_PRIVATE | /*MAP_FIXED_NOREPLACE |*/ MAP_ANONYMOUS, 0, 0);
+		   MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, 0, 0);
 	if (map == MAP_FAILED) {
 		SysMessage("Unable to mmap scratchpad: %d", errno);
 		err = -EINVAL;
@@ -197,7 +221,7 @@ int lightrec_init_mmap(void)
 	target = base + 0x800000;
 	map = mmap_huge(target, CODE_BUFFER_SIZE,
 			PROT_EXEC | PROT_READ | PROT_WRITE,
-			MAP_PRIVATE | /*MAP_FIXED_NOREPLACE |*/ MAP_ANONYMOUS,
+			MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS,
 			-1, 0);
 	if (map == MAP_FAILED) {
 		SysMessage("Unable to mmap code buffer: %d", errno);
